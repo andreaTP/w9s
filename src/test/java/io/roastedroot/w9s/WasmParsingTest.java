@@ -215,32 +215,6 @@ class WasmParsingTest {
     }
 
     @Test
-    void formatHexPreviewShortData() {
-        var data = new byte[] {0x0A, 0x0B, 0x0C};
-        var preview = W9sApp.formatHexPreview(data, 16);
-        assertEquals("0a 0b 0c", preview);
-    }
-
-    @Test
-    void formatHexPreviewTruncated() {
-        var data = new byte[] {0x01, 0x02, 0x03, 0x04, 0x05};
-        var preview = W9sApp.formatHexPreview(data, 3);
-        assertEquals("01 02 03 ...", preview);
-    }
-
-    @Test
-    void formatHexPreviewEmpty() {
-        assertEquals("", W9sApp.formatHexPreview(new byte[0], 16));
-    }
-
-    @Test
-    void formatHexPreviewExactLimit() {
-        var data = new byte[] {0x01, 0x02, 0x03};
-        var preview = W9sApp.formatHexPreview(data, 3);
-        assertEquals("01 02 03", preview);
-    }
-
-    @Test
     void formatWatSingleLine() {
         assertEquals("   1 | hello", W9sApp.formatWat("hello"));
     }
@@ -390,5 +364,35 @@ class WasmParsingTest {
         // Verify the round-tripped module is valid
         var module = Parser.parse(new ByteArrayInputStream(roundTripped));
         assertNotNull(module);
+    }
+
+    @Test
+    void demangleRustSymbol() {
+        try (var demangler = new RustcDemangle()) {
+            // Legacy Rust mangling
+            assertEquals(
+                    "hello::world",
+                    demangler.demangle("_ZN5hello5world17h0123456789abcdefE"));
+
+            // v0 Rust mangling
+            assertEquals("hello::world", demangler.demangle("_RNvCs1234_5hello5world"));
+        }
+    }
+
+    @Test
+    void demangleNonRustSymbol() {
+        try (var demangler = new RustcDemangle()) {
+            // Non-Rust symbols should be returned unchanged
+            assertEquals("plain_name", demangler.demangle("plain_name"));
+            assertEquals("_start", demangler.demangle("_start"));
+        }
+    }
+
+    @Test
+    void demangleEmptyAndNull() {
+        try (var demangler = new RustcDemangle()) {
+            assertEquals("", demangler.demangle(""));
+            assertEquals(null, demangler.demangle(null));
+        }
     }
 }

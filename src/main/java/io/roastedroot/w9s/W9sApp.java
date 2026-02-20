@@ -4,6 +4,7 @@ import static dev.tamboui.toolkit.Toolkit.*;
 
 import com.dylibso.chicory.wasm.WasmModule;
 import com.dylibso.chicory.wasm.types.ExternalType;
+import com.dylibso.chicory.wasm.types.FunctionImport;
 import com.dylibso.chicory.wasm.types.MemoryLimits;
 import com.dylibso.chicory.wasm.types.TableLimits;
 import dev.tamboui.style.Color;
@@ -33,6 +34,7 @@ public final class W9sApp {
     // Dual view data
     private final List<byte[]> functionBodies;
     private final CompletableFuture<List<String>> functionWatsFuture;
+    private final List<String> functionNames;
 
     // Navigation state for detail pane
     private final TableState detailTableState = new TableState();
@@ -53,6 +55,13 @@ public final class W9sApp {
     private int selectedDataIdx = 0;
     private int dataViewScrollOffset = 0;
 
+    // Content view search state (shared by function view and data view)
+    private boolean inContentSearch = false;
+    private String contentSearchQuery = "";
+    private int contentSearchMatchLine = -1;
+
+    private static final int PAGE_SIZE = 20;
+
     public W9sApp(String filename, WasmModule module, byte[] wasmBytes) {
         this.filename = filename;
         this.module = module;
@@ -60,6 +69,7 @@ public final class W9sApp {
         tableState.select(0);
 
         this.functionBodies = extractFunctionBodies(wasmBytes);
+        this.functionNames = buildFunctionNames(module);
 
         this.functionWatsFuture =
                 CompletableFuture.supplyAsync(
@@ -139,6 +149,57 @@ public final class W9sApp {
         return rows;
     }
 
+    private static List<String> buildFunctionNames(WasmModule module) {
+        int importedFuncs = module.importSection().count(ExternalType.FUNCTION);
+        int localFuncCount = module.functionSection().functionCount();
+        var names = new ArrayList<String>(localFuncCount);
+
+        // Initialize with name section names (uses absolute indices)
+        var nameSection = module.nameSection();
+        for (int i = 0; i < localFuncCount; i++) {
+            int absIdx = importedFuncs + i;
+            String name = null;
+            if (nameSection != null) {
+                name = nameSection.nameOfFunction(absIdx);
+            }
+            names.add(name);
+        }
+
+        // Fill in from exports where name section didn't have a name
+        var es = module.exportSection();
+        for (int i = 0; i < es.exportCount(); i++) {
+            var exp = es.getExport(i);
+            if (exp.exportType() == ExternalType.FUNCTION) {
+                int localIdx = (int) exp.index() - importedFuncs;
+                if (localIdx >= 0 && localIdx < localFuncCount && names.get(localIdx) == null) {
+                    names.set(localIdx, exp.name());
+                }
+            }
+        }
+
+        // Demangle all names
+        try (var demangler = new RustcDemangle()) {
+            for (int i = 0; i < names.size(); i++) {
+                var name = names.get(i);
+                if (name != null) {
+                    names.set(i, demangler.demangle(name));
+                }
+            }
+        }
+
+        return names;
+    }
+
+    private String functionName(int localFuncIdx) {
+        if (localFuncIdx >= 0 && localFuncIdx < functionNames.size()) {
+            var name = functionNames.get(localFuncIdx);
+            if (name != null) {
+                return name;
+            }
+        }
+        return "func #" + localFuncIdx;
+    }
+
     private EventResult handleKey(KeyEvent key, ToolkitRunner runner) {
         if (key.isQuit()) {
             runner.quit();
@@ -146,13 +207,34 @@ public final class W9sApp {
         }
 
         if (inFunctionView) {
+            if (inContentSearch) {
+                return handleContentSearch(key, true);
+            }
             if (key.isCancel() || key.isLeft()) {
                 inFunctionView = false;
+                contentSearchQuery = "";
+                contentSearchMatchLine = -1;
                 return EventResult.HANDLED;
             }
             if (key.isSelect() || key.isConfirm()) {
                 showWatMode = !showWatMode;
                 functionViewScrollOffset = 0;
+                contentSearchQuery = "";
+                contentSearchMatchLine = -1;
+                return EventResult.HANDLED;
+            }
+            if (key.isChar('/')) {
+                inContentSearch = true;
+                contentSearchQuery = "";
+                contentSearchMatchLine = -1;
+                return EventResult.HANDLED;
+            }
+            if (key.isChar('n') && !contentSearchQuery.isEmpty()) {
+                searchNextMatch(true);
+                return EventResult.HANDLED;
+            }
+            if (key.isChar('N') && !contentSearchQuery.isEmpty()) {
+                searchPrevMatch(true);
                 return EventResult.HANDLED;
             }
             if (key.isUp()) {
@@ -163,6 +245,14 @@ public final class W9sApp {
             }
             if (key.isDown()) {
                 functionViewScrollOffset++;
+                return EventResult.HANDLED;
+            }
+            if (key.isPageUp()) {
+                functionViewScrollOffset = Math.max(0, functionViewScrollOffset - PAGE_SIZE);
+                return EventResult.HANDLED;
+            }
+            if (key.isPageDown()) {
+                functionViewScrollOffset += PAGE_SIZE;
                 return EventResult.HANDLED;
             }
             if (key.isHome()) {
@@ -177,8 +267,27 @@ public final class W9sApp {
         }
 
         if (inDataView) {
+            if (inContentSearch) {
+                return handleContentSearch(key, false);
+            }
             if (key.isCancel() || key.isLeft()) {
                 inDataView = false;
+                contentSearchQuery = "";
+                contentSearchMatchLine = -1;
+                return EventResult.HANDLED;
+            }
+            if (key.isChar('/')) {
+                inContentSearch = true;
+                contentSearchQuery = "";
+                contentSearchMatchLine = -1;
+                return EventResult.HANDLED;
+            }
+            if (key.isChar('n') && !contentSearchQuery.isEmpty()) {
+                searchNextMatch(false);
+                return EventResult.HANDLED;
+            }
+            if (key.isChar('N') && !contentSearchQuery.isEmpty()) {
+                searchPrevMatch(false);
                 return EventResult.HANDLED;
             }
             if (key.isUp()) {
@@ -189,6 +298,14 @@ public final class W9sApp {
             }
             if (key.isDown()) {
                 dataViewScrollOffset++;
+                return EventResult.HANDLED;
+            }
+            if (key.isPageUp()) {
+                dataViewScrollOffset = Math.max(0, dataViewScrollOffset - PAGE_SIZE);
+                return EventResult.HANDLED;
+            }
+            if (key.isPageDown()) {
+                dataViewScrollOffset += PAGE_SIZE;
                 return EventResult.HANDLED;
             }
             if (key.isHome()) {
@@ -281,6 +398,20 @@ public final class W9sApp {
                     inDetailView = false;
                     searchFilter = "";
                     return EventResult.HANDLED;
+                } else if ("Imports".equals(section)) {
+                    var is = module.importSection();
+                    if (detailIdx < is.importCount()) {
+                        var imp = is.getImport(detailIdx);
+                        if (imp instanceof FunctionImport funcImport) {
+                            int typesIdx = sectionIndex("Types");
+                            if (typesIdx >= 0) {
+                                tableState.select(typesIdx);
+                                detailTableState.select(funcImport.typeIndex());
+                                searchFilter = "";
+                                return EventResult.HANDLED;
+                            }
+                        }
+                    }
                 } else if ("Exports".equals(section)) {
                     var es = module.exportSection();
                     if (detailIdx < es.exportCount()) {
@@ -466,14 +597,41 @@ public final class W9sApp {
 
         if (inFunctionView) {
             int funcCount = module.codeSection().functionBodyCount();
+            var funcName = functionName(selectedFunctionIdx);
             var funcTitle =
-                    "func #" + selectedFunctionIdx + " (" + (selectedFunctionIdx + 1) + "/"
-                            + funcCount + ")";
+                    funcName + " (" + (selectedFunctionIdx + 1) + "/" + funcCount + ")";
             var modeLabel = showWatMode ? "WAT" : "Hex";
             var modeBorder = showWatMode ? Color.MAGENTA : Color.CYAN;
             var contentView = showWatMode
                     ? renderWatView(selectedFunctionIdx)
                     : renderHexView(selectedFunctionIdx);
+            var panelTitle = modeLabel + " - " + funcTitle;
+            if (!contentSearchQuery.isEmpty() && !inContentSearch) {
+                panelTitle += " [/" + contentSearchQuery + "]";
+            }
+            Element funcHelp;
+            if (inContentSearch) {
+                funcHelp = row(
+                        text(" /: " + contentSearchQuery + "_").cyan().fit(),
+                        text("  ESC").cyan().fit(),
+                        text(" cancel  ").dim().fit(),
+                        text("Enter").cyan().fit(),
+                        text(" find").dim().fit());
+            } else {
+                funcHelp = row(
+                        text(" \u2191\u2193").cyan().fit(),
+                        text(" scroll  ").dim().fit(),
+                        text("PgUp/Dn").cyan().fit(),
+                        text(" page  ").dim().fit(),
+                        text("/").cyan().fit(),
+                        text(" search  ").dim().fit(),
+                        text("n/N").cyan().fit(),
+                        text(" next/prev  ").dim().fit(),
+                        text("Enter").cyan().fit(),
+                        text(" hex/WAT  ").dim().fit(),
+                        text("ESC/\u2190").cyan().fit(),
+                        text(" back").dim().fit());
+            }
             return column(
                             titleBar,
                             row(
@@ -484,23 +642,13 @@ public final class W9sApp {
                                             .borderColor(Color.DARK_GRAY)
                                             .length(28),
                                     panel(() -> contentView)
-                                            .title(modeLabel + " - " + funcTitle)
+                                            .title(panelTitle)
                                             .bottomTitle(functionSignature(selectedFunctionIdx))
                                             .rounded()
                                             .borderColor(modeBorder)
                                             .fill(1))
                                     .fill(),
-                            panel(row(
-                                    text(" q").cyan().fit(),
-                                    text(" quit  ").dim().fit(),
-                                    text("\u2191\u2193").cyan().fit(),
-                                    text(" scroll  ").dim().fit(),
-                                    text("Enter").cyan().fit(),
-                                    text(" hex/WAT  ").dim().fit(),
-                                    text("Home/End").cyan().fit(),
-                                    text(" top/bottom  ").dim().fit(),
-                                    text("ESC/\u2190").cyan().fit(),
-                                    text(" back").dim().fit()))
+                            panel(funcHelp)
                                     .rounded()
                                     .borderColor(Color.DARK_GRAY)
                                     .length(3))
@@ -515,6 +663,31 @@ public final class W9sApp {
                             + dataCount + ")";
             var seg = ds.getDataSegment(selectedDataIdx);
             var hexContent = renderDataHexView(seg.data());
+            var dataPanelTitle = "Hex - " + dataTitle;
+            if (!contentSearchQuery.isEmpty() && !inContentSearch) {
+                dataPanelTitle += " [/" + contentSearchQuery + "]";
+            }
+            Element dataHelp;
+            if (inContentSearch) {
+                dataHelp = row(
+                        text(" /: " + contentSearchQuery + "_").cyan().fit(),
+                        text("  ESC").cyan().fit(),
+                        text(" cancel  ").dim().fit(),
+                        text("Enter").cyan().fit(),
+                        text(" find").dim().fit());
+            } else {
+                dataHelp = row(
+                        text(" \u2191\u2193").cyan().fit(),
+                        text(" scroll  ").dim().fit(),
+                        text("PgUp/Dn").cyan().fit(),
+                        text(" page  ").dim().fit(),
+                        text("/").cyan().fit(),
+                        text(" search  ").dim().fit(),
+                        text("n/N").cyan().fit(),
+                        text(" next/prev  ").dim().fit(),
+                        text("ESC/\u2190").cyan().fit(),
+                        text(" back").dim().fit());
+            }
             return column(
                             titleBar,
                             row(
@@ -525,21 +698,13 @@ public final class W9sApp {
                                             .borderColor(Color.DARK_GRAY)
                                             .length(28),
                                     panel(() -> hexContent)
-                                            .title("Hex - " + dataTitle)
+                                            .title(dataPanelTitle)
                                             .bottomTitle(seg.data().length + " bytes")
                                             .rounded()
                                             .borderColor(Color.CYAN)
                                             .fill(1))
                                     .fill(),
-                            panel(row(
-                                    text(" q").cyan().fit(),
-                                    text(" quit  ").dim().fit(),
-                                    text("\u2191\u2193").cyan().fit(),
-                                    text(" scroll  ").dim().fit(),
-                                    text("Home/End").cyan().fit(),
-                                    text(" top/bottom  ").dim().fit(),
-                                    text("ESC/\u2190").cyan().fit(),
-                                    text(" back").dim().fit()))
+                            panel(dataHelp)
                                     .rounded()
                                     .borderColor(Color.DARK_GRAY)
                                     .length(3))
@@ -582,6 +747,17 @@ public final class W9sApp {
                                 text(" filter  ").dim().fit(),
                                 text("Enter").cyan().fit(),
                                 text(" \u2192 Code").dim().fit());
+            } else if ("Imports".equals(selectedName)) {
+                helpContent =
+                        row(
+                                text(" ESC/\u2190").cyan().fit(),
+                                text(" back  ").dim().fit(),
+                                text("\u2191\u2193").cyan().fit(),
+                                text(" scroll  ").dim().fit(),
+                                text("/").cyan().fit(),
+                                text(" filter  ").dim().fit(),
+                                text("Enter").cyan().fit(),
+                                text(" \u2192 Type").dim().fit());
             } else if ("Exports".equals(selectedName)) {
                 helpContent =
                         row(
@@ -707,6 +883,111 @@ public final class W9sApp {
         return sb.toString();
     }
 
+    private EventResult handleContentSearch(KeyEvent key, boolean isFunctionView) {
+        if (key.isCancel()) {
+            inContentSearch = false;
+            contentSearchQuery = "";
+            contentSearchMatchLine = -1;
+            return EventResult.HANDLED;
+        }
+        if (key.isConfirm()) {
+            inContentSearch = false;
+            if (!contentSearchQuery.isEmpty()) {
+                searchNextMatch(isFunctionView);
+            }
+            return EventResult.HANDLED;
+        }
+        if (key.isDeleteBackward() && !contentSearchQuery.isEmpty()) {
+            contentSearchQuery = contentSearchQuery.substring(0, contentSearchQuery.length() - 1);
+            return EventResult.HANDLED;
+        }
+        if (key.code() == KeyCode.CHAR && !key.hasCtrl() && !key.hasAlt()) {
+            contentSearchQuery += key.character();
+            return EventResult.HANDLED;
+        }
+        return EventResult.HANDLED;
+    }
+
+    private String currentContentText(boolean isFunctionView) {
+        if (isFunctionView) {
+            if (showWatMode) {
+                if (!functionWatsFuture.isDone()) return "";
+                var wats = functionWatsFuture.join();
+                if (selectedFunctionIdx >= wats.size()) return "";
+                return formatWat(wats.get(selectedFunctionIdx));
+            } else {
+                if (selectedFunctionIdx >= functionBodies.size()) return "";
+                return formatHex(functionBodies.get(selectedFunctionIdx));
+            }
+        } else {
+            var ds = module.dataSection();
+            if (selectedDataIdx >= ds.dataSegmentCount()) return "";
+            return formatHex(ds.getDataSegment(selectedDataIdx).data());
+        }
+    }
+
+    private void searchNextMatch(boolean isFunctionView) {
+        var content = currentContentText(isFunctionView);
+        var lines = content.split("\n", -1);
+        var query = contentSearchQuery.toLowerCase();
+        int startLine = (isFunctionView ? functionViewScrollOffset : dataViewScrollOffset) + 1;
+        for (int i = startLine; i < lines.length; i++) {
+            if (lines[i].toLowerCase().contains(query)) {
+                contentSearchMatchLine = i;
+                if (isFunctionView) {
+                    functionViewScrollOffset = i;
+                } else {
+                    dataViewScrollOffset = i;
+                }
+                return;
+            }
+        }
+        // Wrap around from the beginning
+        for (int i = 0; i < startLine && i < lines.length; i++) {
+            if (lines[i].toLowerCase().contains(query)) {
+                contentSearchMatchLine = i;
+                if (isFunctionView) {
+                    functionViewScrollOffset = i;
+                } else {
+                    dataViewScrollOffset = i;
+                }
+                return;
+            }
+        }
+        contentSearchMatchLine = -1;
+    }
+
+    private void searchPrevMatch(boolean isFunctionView) {
+        var content = currentContentText(isFunctionView);
+        var lines = content.split("\n", -1);
+        var query = contentSearchQuery.toLowerCase();
+        int startLine = (isFunctionView ? functionViewScrollOffset : dataViewScrollOffset) - 1;
+        for (int i = startLine; i >= 0; i--) {
+            if (lines[i].toLowerCase().contains(query)) {
+                contentSearchMatchLine = i;
+                if (isFunctionView) {
+                    functionViewScrollOffset = i;
+                } else {
+                    dataViewScrollOffset = i;
+                }
+                return;
+            }
+        }
+        // Wrap around from the end
+        for (int i = lines.length - 1; i > startLine; i--) {
+            if (lines[i].toLowerCase().contains(query)) {
+                contentSearchMatchLine = i;
+                if (isFunctionView) {
+                    functionViewScrollOffset = i;
+                } else {
+                    dataViewScrollOffset = i;
+                }
+                return;
+            }
+        }
+        contentSearchMatchLine = -1;
+    }
+
     static String formatWat(String wat) {
         var lines = wat.split("\n");
         var sb = new StringBuilder();
@@ -784,8 +1065,8 @@ public final class W9sApp {
     private Element renderFunctions() {
         var t =
                 table()
-                        .header("#", "Type Idx", "Signature")
-                        .widths(length(5), length(10), fill(1))
+                        .header("#", "Name", "Signature")
+                        .widths(length(5), fill(1), fill(1))
                         .columnSpacing(1);
         applyDetailHighlight(t);
         var fs = module.functionSection();
@@ -796,7 +1077,7 @@ public final class W9sApp {
             var ft = ts.getType(typeIdx);
             t.row(
                     String.valueOf(i),
-                    String.valueOf(typeIdx),
+                    functionName(i),
                     ft.params() + " -> " + ft.returns());
         }
         return t;
@@ -936,34 +1217,20 @@ public final class W9sApp {
     private Element renderCode() {
         var t =
                 table()
-                        .header("#", "Size", "Bytes")
-                        .widths(length(5), length(8), fill(1))
+                        .header("#", "Name", "Size")
+                        .widths(length(5), fill(1), length(8))
                         .columnSpacing(1);
         applyDetailHighlight(t);
         var cs = module.codeSection();
         for (int i = 0; i < cs.functionBodyCount(); i++) {
             if (!matchesFilter(i)) continue;
             var bytes = i < functionBodies.size() ? functionBodies.get(i) : new byte[0];
-            var preview = formatHexPreview(bytes, 16);
             t.row(
                     String.valueOf(i),
-                    String.valueOf(bytes.length),
-                    preview);
+                    functionName(i),
+                    String.valueOf(bytes.length));
         }
         return t;
-    }
-
-    static String formatHexPreview(byte[] data, int maxBytes) {
-        var sb = new StringBuilder();
-        int len = Math.min(data.length, maxBytes);
-        for (int i = 0; i < len; i++) {
-            if (i > 0) sb.append(' ');
-            sb.append(String.format("%02x", data[i] & 0xFF));
-        }
-        if (data.length > maxBytes) {
-            sb.append(" ...");
-        }
-        return sb.toString();
     }
 
     private Element renderData() {
