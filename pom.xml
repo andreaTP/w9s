@@ -117,6 +117,47 @@
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <version>3.2.0</version>
+        <executions>
+          <execution>
+            <id>build-rustc-demangle-wasm</id>
+            <goals>
+              <goal>run</goal>
+            </goals>
+            <phase>generate-resources</phase>
+            <configuration>
+              <target>
+                <exec dir="${project.basedir}/src/main/wasm/rustc-demangle" executable="cargo" failonerror="true">
+                  <arg value="build"/>
+                  <arg value="--target"/>
+                  <arg value="wasm32-wasip1"/>
+                  <arg value="--release"/>
+                </exec>
+                <copy file="${project.basedir}/src/main/wasm/rustc-demangle/target/wasm32-wasip1/release/rustc_demangle_wasm.wasm" tofile="${project.basedir}/src/main/wasm/rustc_demangle.wasm"/>
+              </target>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>com.dylibso.chicory</groupId>
+        <artifactId>chicory-compiler-maven-plugin</artifactId>
+        <version>${chicory.version}</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>compile</goal>
+            </goals>
+            <configuration>
+              <wasmFile>${project.basedir}/src/main/wasm/rustc_demangle.wasm</wasmFile>
+              <name>io.roastedroot.w9s.RustcDemangleModule</name>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <version>${maven-compiler-plugin.version}</version>
         <configuration>

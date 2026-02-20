@@ -6,28 +6,12 @@ import com.dylibso.chicory.runtime.Instance;
 import com.dylibso.chicory.runtime.Memory;
 import com.dylibso.chicory.wasi.WasiOptions;
 import com.dylibso.chicory.wasi.WasiPreview1;
-import com.dylibso.chicory.wasm.Parser;
 import com.dylibso.chicory.wasm.WasmModule;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Objects;
 
 public final class RustcDemangle implements AutoCloseable {
 
-    private static final String WASM_RESOURCE = "rustc_demangle.wasm";
-
-    private static final WasmModule MODULE;
-
-    static {
-        try (var is =
-                Objects.requireNonNull(
-                        RustcDemangle.class.getClassLoader().getResourceAsStream(WASM_RESOURCE))) {
-            MODULE = Parser.parse(is);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
+    private static final WasmModule MODULE = RustcDemangleModule.load();
 
     private final WasiPreview1 wasi;
     private final Memory memory;
@@ -40,7 +24,11 @@ public final class RustcDemangle implements AutoCloseable {
         var wasiOpts = WasiOptions.builder().inheritSystem().build();
         this.wasi = WasiPreview1.builder().withOptions(wasiOpts).build();
         var imports = ImportValues.builder().addFunction(wasi.toHostFunctions()).build();
-        var instance = Instance.builder(MODULE).withImportValues(imports).build();
+        var instance =
+                Instance.builder(MODULE)
+                        .withMachineFactory(RustcDemangleModule::create)
+                        .withImportValues(imports)
+                        .build();
 
         this.memory = instance.memory();
         this.alloc = instance.export("alloc");
