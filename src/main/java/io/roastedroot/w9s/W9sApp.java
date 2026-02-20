@@ -593,6 +593,17 @@ public final class W9sApp {
                                 text(" filter  ").dim().fit(),
                                 text("Enter").cyan().fit(),
                                 text(" view func").dim().fit());
+            } else if ("Data".equals(selectedName)) {
+                helpContent =
+                        row(
+                                text(" ESC/\u2190").cyan().fit(),
+                                text(" back  ").dim().fit(),
+                                text("\u2191\u2193").cyan().fit(),
+                                text(" scroll  ").dim().fit(),
+                                text("/").cyan().fit(),
+                                text(" filter  ").dim().fit(),
+                                text("Enter").cyan().fit(),
+                                text(" view hex").dim().fit());
             } else {
                 helpContent =
                         row(
@@ -647,6 +658,16 @@ public final class W9sApp {
         }
         var hex = formatHex(functionBodies.get(funcIdx));
         return richText(scrollContent(hex, functionViewScrollOffset))
+                .overflow(Overflow.CLIP)
+                .fill();
+    }
+
+    private Element renderDataHexView(byte[] data) {
+        if (data.length == 0) {
+            return text("No data available").dim();
+        }
+        var hex = formatHex(data);
+        return richText(scrollContent(hex, dataViewScrollOffset))
                 .overflow(Overflow.CLIP)
                 .fill();
     }
