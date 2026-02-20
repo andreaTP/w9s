@@ -1,0 +1,9 @@
+{
+  "resources": {
+    "includes": [
+      {"pattern": "dev/tamboui/.*\\.properties$"},
+      {"pattern": "dev/tamboui/.*\\.css$"},
+      {"pattern": "dev/tamboui/.*\\.tcss$"}
+    ]
+  }
+}
