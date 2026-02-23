@@ -807,7 +807,7 @@ public final class W9sApp {
                         return EventResult.HANDLED;
                     }
                 } else {
-                    if (key.isFocusNext() || key.isFocusPrevious()) {
+                    if (key.isChar('t') && key.hasCtrl()) {
                         memWriteNullTerm = !memWriteNullTerm;
                         return EventResult.HANDLED;
                     }
@@ -1006,12 +1006,9 @@ public final class W9sApp {
                     return EventResult.HANDLED;
                 }
                 if (key.code() == KeyCode.CHAR && !key.hasCtrl() && !key.hasAlt()) {
-                    char c = key.character();
-                    if (Character.isDigit(c)) {
-                        searchFilter += c;
-                        detailTableState.select(0);
-                        return EventResult.HANDLED;
-                    }
+                    searchFilter += key.character();
+                    detailTableState.select(0);
+                    return EventResult.HANDLED;
                 }
                 return EventResult.HANDLED;
             }
@@ -1183,21 +1180,25 @@ public final class W9sApp {
                     } else {
                         memStatusMessage = instanceError;
                     }
-                } else if ("Globals".equals(section)) {
-                    var gs = module.globalSection();
-                    if (detailIdx < gs.globalCount()
-                            && gs.getGlobal(detailIdx).mutabilityType()
-                                    == MutabilityType.Var) {
-                        if (ensureInstance()) {
-                            inGlobalEdit = true;
-                            globalEditIdx = detailIdx;
-                            globalEditValue = "";
-                            globalEditError = null;
-                        } else {
-                            globalEditError = instanceError;
-                        }
-                        return EventResult.HANDLED;
+                }
+            }
+            // 'e' in Globals detail → edit mutable global
+            if (key.isChar('e') && "Globals".equals(selectedSectionName())) {
+                var detailIdx2 =
+                        detailTableState.selected() != null ? detailTableState.selected() : 0;
+                var gs = module.globalSection();
+                if (detailIdx2 < gs.globalCount()
+                        && gs.getGlobal(detailIdx2).mutabilityType()
+                                == MutabilityType.Var) {
+                    if (ensureInstance()) {
+                        inGlobalEdit = true;
+                        globalEditIdx = detailIdx2;
+                        globalEditValue = "";
+                        globalEditError = null;
+                    } else {
+                        globalEditError = instanceError;
                     }
+                    return EventResult.HANDLED;
                 }
             }
             // 'r' in Exports detail → run exported function
@@ -1305,7 +1306,27 @@ public final class W9sApp {
     }
 
     private boolean matchesFilter(int index) {
-        return searchFilter.isEmpty() || String.valueOf(index).startsWith(searchFilter);
+        if (searchFilter.isEmpty()) return true;
+        var filter = searchFilter.toLowerCase();
+        // Always match on index
+        if (String.valueOf(index).startsWith(filter)) return true;
+        // Match on names in appropriate sections
+        var section = selectedSectionName();
+        return switch (section) {
+            case "Functions", "Code" -> functionName(index).toLowerCase().contains(filter);
+            case "Exports" -> {
+                var es = module.exportSection();
+                yield index < es.exportCount()
+                        && es.getExport(index).name().toLowerCase().contains(filter);
+            }
+            case "Imports" -> {
+                var is = module.importSection();
+                yield index < is.importCount()
+                        && (is.getImport(index).name().toLowerCase().contains(filter)
+                                || is.getImport(index).module().toLowerCase().contains(filter));
+            }
+            default -> false;
+        };
     }
 
     private int filteredDetailRowCount(String sectionName) {
@@ -1374,7 +1395,8 @@ public final class W9sApp {
             Element funcHelp;
             if (inContentSearch) {
                 funcHelp = row(
-                        text(" /: " + contentSearchQuery + "_").cyan().fit(),
+                        text(" /: ").cyan().fit(),
+                        text(contentSearchQuery + "_").yellow().fit(),
                         text("  ESC").cyan().fit(),
                         text(" cancel  ").dim().fit(),
                         text("Enter").cyan().fit(),
@@ -1432,7 +1454,8 @@ public final class W9sApp {
             Element dataHelp;
             if (inContentSearch) {
                 dataHelp = row(
-                        text(" /: " + contentSearchQuery + "_").cyan().fit(),
+                        text(" /: ").cyan().fit(),
+                        text(contentSearchQuery + "_").yellow().fit(),
                         text("  ESC").cyan().fit(),
                         text(" cancel  ").dim().fit(),
                         text("Enter").cyan().fit(),
@@ -1493,7 +1516,8 @@ public final class W9sApp {
         if (inSearch) {
             helpContent =
                     row(
-                            text(" /: " + searchFilter + "_").cyan().fit(),
+                            text(" /: ").cyan().fit(),
+                            text(searchFilter + "_").yellow().fit(),
                             text("  ESC").cyan().fit(),
                             text(" cancel  ").dim().fit(),
                             text("Enter").cyan().fit(),
@@ -1573,7 +1597,7 @@ public final class W9sApp {
                                     text(" scroll  ").dim().fit(),
                                     text("/").cyan().fit(),
                                     text(" filter  ").dim().fit(),
-                                    text("Enter").cyan().fit(),
+                                    text("e").cyan().fit(),
                                     text(" edit").dim().fit());
                 }
             } else {
@@ -1719,24 +1743,36 @@ public final class W9sApp {
     // === Run Param Input Layout ===
 
     private Element renderRunParamLayout(Element titleBar, TableElement sections) {
-        var sb = new StringBuilder();
-        sb.append("Run: ").append(runExportName).append(" - Enter Parameters\n");
-        sb.append("Signature: ").append(runParamTypes).append(" -> ")
-                .append(runReturnTypes).append('\n');
-        sb.append('\n');
+        var lines = new ArrayList<Line>();
+        lines.add(Line.from(List.of(
+                Span.styled("Signature: ", Style.EMPTY.dim()),
+                Span.styled(runParamTypes + " -> " + runReturnTypes, Style.EMPTY))));
+        lines.add(Line.empty());
 
         for (int i = 0; i < runParamTypes.size(); i++) {
-            var prefix = (i == runParamFocusIdx) ? ">> " : "   ";
-            var cursor = (i == runParamFocusIdx) ? "_" : "";
-            sb.append(prefix).append("param ").append(i)
-                    .append(" (").append(runParamTypes.get(i)).append("): ")
-                    .append(runParamValues[i]).append(cursor).append('\n');
+            var focused = (i == runParamFocusIdx);
+            var prefix = focused ? "\u25b6 " : "  ";
+            var cursor = focused ? "_" : "";
+            var label = prefix + "param " + i + " (" + runParamTypes.get(i) + "): ";
+            var value = runParamValues[i] + cursor;
+            if (focused) {
+                lines.add(Line.from(List.of(
+                        Span.styled(label, Style.EMPTY.fg(Color.YELLOW).bold()),
+                        Span.styled(value, Style.EMPTY.fg(Color.YELLOW).bold()))));
+            } else {
+                lines.add(Line.from(List.of(
+                        Span.styled(label, Style.EMPTY.dim()),
+                        Span.styled(value, Style.EMPTY))));
+            }
         }
 
         if (runParamError != null) {
-            sb.append("\n  Error: ").append(runParamError).append('\n');
+            lines.add(Line.empty());
+            lines.add(Line.from(List.of(
+                    Span.styled("  Error: " + runParamError, Style.EMPTY.fg(Color.YELLOW)))));
         }
-        sb.append("\n  Enter to execute, ESC to cancel\n");
+
+        var styledText = Text.from(lines);
 
         var helpBar = row(
                 text(" \u2191\u2193").cyan().fit(),
@@ -1755,10 +1791,10 @@ public final class W9sApp {
                                         .rounded()
                                         .borderColor(Color.DARK_GRAY)
                                         .length(28),
-                                panel(richText(sb.toString()).overflow(Overflow.CLIP).fill())
-                                        .title("Parameters")
+                                panel(richText(styledText).overflow(Overflow.CLIP).fill())
+                                        .title("Run: " + runExportName)
                                         .rounded()
-                                        .borderColor(Color.YELLOW)
+                                        .borderColor(Color.CYAN)
                                         .fill(1))
                                 .fill(),
                         panel(helpBar)
@@ -1815,7 +1851,7 @@ public final class W9sApp {
             if (memWriteAddrPhase) {
                 promptText = String.format("Write string at address: %s_", memWriteAddr);
             } else {
-                promptText = String.format("Write string at %s [%s] (Tab to toggle): %s_",
+                promptText = String.format("Write string at %s [%s] (Ctrl+T to toggle): %s_",
                         memWriteAddr,
                         memWriteNullTerm ? "null-terminated" : "raw",
                         memWriteStringInput);
@@ -1859,19 +1895,25 @@ public final class W9sApp {
                     text(" back").dim().fit());
         }
 
+        // Build styled text: hex dump in default color, prompt in yellow
+        var memLines = new ArrayList<Line>();
+        for (var line : sb.toString().split("\n", -1)) {
+            memLines.add(Line.from(List.of(Span.styled(line, Style.EMPTY))));
+        }
+        if (promptText != null) {
+            memLines.add(Line.empty());
+            for (var line : promptText.split("\n", -1)) {
+                memLines.add(Line.from(List.of(
+                        Span.styled(line, Style.EMPTY.fg(Color.YELLOW)))));
+            }
+        }
+        var memText = Text.from(memLines);
+
         var memContent =
-                column(
-                        panel(richText(sb.toString()).overflow(Overflow.CLIP).fill())
-                                .title(memTitle)
-                                .rounded()
-                                .borderColor(Color.CYAN)
-                                .fill(1),
-                        promptText != null
-                                ? panel(text(promptText).yellow().fit())
-                                        .rounded()
-                                        .borderColor(Color.YELLOW)
-                                        .length(3 + (promptText.contains("\n") ? 1 : 0))
-                                : text("").fit())
+                panel(richText(memText).overflow(Overflow.CLIP).fill())
+                        .title(memTitle)
+                        .rounded()
+                        .borderColor(Color.CYAN)
                         .fill(1);
 
         return column(
@@ -2368,10 +2410,10 @@ public final class W9sApp {
             if (globalEditError != null) {
                 sb.append(String.format("%n%s", globalEditError));
             }
-            return column(t, text(sb.toString()).cyan().fit()).fill();
+            return column(t, text(sb.toString()).yellow().fit()).fill();
         }
         if (globalEditError != null) {
-            return column(t, text(globalEditError).cyan().fit()).fill();
+            return column(t, text(globalEditError).yellow().fit()).fill();
         }
         return t;
     }
