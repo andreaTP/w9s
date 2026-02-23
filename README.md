@@ -43,10 +43,58 @@ Both `.wasm` (binary) and `.wat` (text) files are supported.
 
 ## Usage
 
-Use `↑`/`↓` to navigate sections, press `→` to drill into a section's details. Press `ESC` or `←` to go back.
+### Navigation
 
-From the **Code** section, press `Enter` on a function to open the **hex dump** view of its body. Press `Enter` again to toggle to the **WAT** (WebAssembly Text) view. Use `↑`/`↓` to scroll line by line, `PgUp`/`PgDn` to page, and `Home`/`End` to jump to the top or bottom.
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` | Navigate / scroll |
+| `→` / `Enter` | Drill into section details |
+| `ESC` / `←` | Go back |
+| `PgUp`/`PgDn` | Page up / down |
+| `Home`/`End` | Jump to top / bottom |
+| `/` | Search / filter |
+| `q` | Quit |
 
-Press `/` to search within hex or WAT content, then `n`/`N` to jump to the next or previous match.
+### Section-specific keys
+
+| Key | View | Action |
+|-----|------|--------|
+| `Enter` | **Code** | Open function hex/WAT view |
+| `Enter` | **Functions** | Jump to Code section |
+| `Enter` | **Imports** | Jump to Type definition |
+| `Enter` | **Exports** | View / enter sub-view |
+| `Enter` | **Data** | View hex dump |
+| `r` | **Exports** | Run exported function |
+| `e` | **Globals** | Edit mutable global value |
+
+### Function view (Code → Enter)
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Toggle hex dump / WAT view |
+| `/` | Search in content |
+| `n` / `N` | Next / previous match |
+| `↑`/`↓` | Scroll line by line |
+| `PgUp`/`PgDn` | Page up / down |
+
+### Memory editor (Exports/Memories → Enter on memory)
+
+| Key | Action |
+|-----|--------|
+| `g` | Go to address |
+| `w` | Write string at address |
+| `e` | Write typed value (i32/i64/f32/f64) at address |
+| `Ctrl+T` | Toggle null-termination (in write-string mode) |
+| `↑`/`↓` | Scroll memory |
+| `Enter` | Confirm input |
+| `ESC` | Cancel input / exit |
+
+### Search & filter
+
+Press `/` in any detail view to filter rows. The filter matches on index numbers and, in views that display names (Functions, Code, Exports, Imports), also matches on names (case-insensitive substring).
+
+In function hex/WAT views, `/` performs a content search. Use `n`/`N` to navigate matches.
+
+### Notes
 
 Rust-mangled function names are automatically demangled using [`rustc-demangle`](https://crates.io/crates/rustc-demangle) compiled to WebAssembly and executed via [Chicory](https://github.com/nicholasgasior/chicory).
