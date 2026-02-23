@@ -56,6 +56,7 @@
 
     <!-- runtime versions -->
     <chicory.version>1.6.1</chicory.version>
+    <lumis4j.version>0.0.7</lumis4j.version>
     <picocli.version>4.7.7</picocli.version>
     <tamboui.version>0.2.0-SNAPSHOT</tamboui.version>
   </properties>
@@ -83,6 +84,11 @@
       <groupId>com.dylibso.chicory</groupId>
       <artifactId>wasm-tools</artifactId>
       <version>${chicory.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.roastedroot</groupId>
+      <artifactId>lumis4j</artifactId>
+      <version>${lumis4j.version}</version>
     </dependency>
     <dependency>
       <groupId>dev.tamboui</groupId>
