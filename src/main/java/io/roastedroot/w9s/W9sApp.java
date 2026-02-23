@@ -14,6 +14,7 @@ import com.dylibso.chicory.wasm.WasmModule;
 import com.dylibso.chicory.wasm.types.ExternalType;
 import com.dylibso.chicory.wasm.types.FunctionImport;
 import com.dylibso.chicory.wasm.types.MemoryLimits;
+import com.dylibso.chicory.wasm.types.MutabilityType;
 import com.dylibso.chicory.wasm.types.TableLimits;
 import com.dylibso.chicory.wasm.types.ValType;
 import dev.tamboui.style.Color;
@@ -125,6 +126,12 @@ public final class W9sApp {
     private static final String[] TYPED_VALUE_TYPES = {"i32", "i64", "f32", "f64"};
     private String memStatusMessage;
 
+    // === Global editor state ===
+    private boolean inGlobalEdit = false;
+    private int globalEditIdx = -1;
+    private String globalEditValue = "";
+    private String globalEditError;
+
     private volatile Lumis lumis;
     private volatile Highlighter watHighlighter;
     private final CompletableFuture<Void> highlighterReady;
@@ -231,7 +238,10 @@ public final class W9sApp {
             }
             var imports = builder.build();
             wasmInstance =
-                    Instance.builder(module).withImportValues(imports).build();
+                    Instance.builder(module)
+                            .withImportValues(imports)
+                            .withStart(false)
+                            .build();
             return true;
         } catch (Exception e) {
             instanceError = "Failed to instantiate module: " + e.getMessage();
@@ -1006,6 +1016,44 @@ public final class W9sApp {
                 return EventResult.HANDLED;
             }
 
+            // Sub-mode: global edit
+            if (inGlobalEdit) {
+                if (key.isCancel()) {
+                    inGlobalEdit = false;
+                    globalEditError = null;
+                    return EventResult.HANDLED;
+                }
+                if (key.isConfirm()) {
+                    if (!globalEditValue.isEmpty()) {
+                        try {
+                            var gs = module.globalSection();
+                            int importedGlobals =
+                                    module.importSection().count(ExternalType.GLOBAL);
+                            var g = gs.getGlobal(globalEditIdx);
+                            var gi = wasmInstance.global(importedGlobals + globalEditIdx);
+                            var type = g.valueType();
+                            long raw = parseParam(type, globalEditValue);
+                            gi.setValue(raw);
+                            globalEditError = null;
+                        } catch (Exception e) {
+                            globalEditError = "Set failed: " + e.getMessage();
+                        }
+                    }
+                    inGlobalEdit = false;
+                    return EventResult.HANDLED;
+                }
+                if (key.isDeleteBackward() && !globalEditValue.isEmpty()) {
+                    globalEditValue =
+                            globalEditValue.substring(0, globalEditValue.length() - 1);
+                    return EventResult.HANDLED;
+                }
+                if (key.code() == KeyCode.CHAR && !key.hasCtrl() && !key.hasAlt()) {
+                    globalEditValue += key.character();
+                    return EventResult.HANDLED;
+                }
+                return EventResult.HANDLED;
+            }
+
             if (key.isChar('/')) {
                 inSearch = true;
                 searchFilter = "";
@@ -1134,6 +1182,21 @@ public final class W9sApp {
                         return EventResult.HANDLED;
                     } else {
                         memStatusMessage = instanceError;
+                    }
+                } else if ("Globals".equals(section)) {
+                    var gs = module.globalSection();
+                    if (detailIdx < gs.globalCount()
+                            && gs.getGlobal(detailIdx).mutabilityType()
+                                    == MutabilityType.Var) {
+                        if (ensureInstance()) {
+                            inGlobalEdit = true;
+                            globalEditIdx = detailIdx;
+                            globalEditValue = "";
+                            globalEditError = null;
+                        } else {
+                            globalEditError = instanceError;
+                        }
+                        return EventResult.HANDLED;
                     }
                 }
             }
@@ -1277,13 +1340,13 @@ public final class W9sApp {
         var titleBar =
                 row(
                         column(
-                                text(" \u2588\u2584\u2588 \u2588\u2580\u2588 \u2588\u2580\u2580")
+                                text(" \u257b \u257b \u250f\u2501\u2513 \u250f\u2501\u2578")
                                         .fg(Color.LIGHT_CYAN)
                                         .bold(),
-                                text(" \u2588\u2580\u2588 \u2580\u2580\u2588 \u2580\u2580\u2588")
+                                text(" \u2503\u257b\u2503 \u2517\u2501\u252b \u2517\u2501\u2513")
                                         .cyan()
                                         .bold(),
-                                text(" \u2580 \u2580 \u2580\u2580\u2580 \u2580\u2580\u2580")
+                                text(" \u2517\u253b\u251b \u257a\u2501\u251b \u257a\u2501\u251b")
                                         .fg(Color.LIGHT_BLUE)
                                         .bold())
                                 .length(12),
@@ -1493,6 +1556,26 @@ public final class W9sApp {
                                 text(" filter  ").dim().fit(),
                                 text("Enter").cyan().fit(),
                                 text(" view hex").dim().fit());
+            } else if ("Globals".equals(selectedName)) {
+                if (inGlobalEdit) {
+                    helpContent =
+                            row(
+                                    text(" Enter").cyan().fit(),
+                                    text(" confirm  ").dim().fit(),
+                                    text("ESC").cyan().fit(),
+                                    text(" cancel").dim().fit());
+                } else {
+                    helpContent =
+                            row(
+                                    text(" ESC/\u2190").cyan().fit(),
+                                    text(" back  ").dim().fit(),
+                                    text("\u2191\u2193").cyan().fit(),
+                                    text(" scroll  ").dim().fit(),
+                                    text("/").cyan().fit(),
+                                    text(" filter  ").dim().fit(),
+                                    text("Enter").cyan().fit(),
+                                    text(" edit").dim().fit());
+                }
             } else {
                 helpContent =
                         row(
@@ -1722,37 +1805,38 @@ public final class W9sApp {
             }
         }
 
-        // Sub-mode prompts
+        var memTitle = String.format("Memory (%d pages, %d bytes)", mem.pages(), totalBytes);
+
+        // Sub-mode prompt as a separate panel
+        String promptText = null;
         if (inMemGoto) {
-            sb.append(String.format("%nGo to address: %s_", memGotoInput));
+            promptText = String.format("Go to address: %s_", memGotoInput);
         } else if (inMemWriteString) {
             if (memWriteAddrPhase) {
-                sb.append(String.format("%nWrite string at address: %s_", memWriteAddr));
+                promptText = String.format("Write string at address: %s_", memWriteAddr);
             } else {
-                sb.append(String.format("%nWrite string at %s [%s] (Tab to toggle): %s_",
+                promptText = String.format("Write string at %s [%s] (Tab to toggle): %s_",
                         memWriteAddr,
                         memWriteNullTerm ? "null-terminated" : "raw",
-                        memWriteStringInput));
+                        memWriteStringInput);
             }
         } else if (inMemWriteTyped) {
             if (memWriteTypedPhase == 0) {
-                sb.append(String.format("%nWrite value at address: %s_", memWriteTypedAddr));
+                promptText = String.format("Write value at address: %s_", memWriteTypedAddr);
             } else if (memWriteTypedPhase == 1) {
-                sb.append(String.format("%nType: \u25c4 %s \u25ba (\u2190/\u2192 to change, Enter to confirm)",
-                        TYPED_VALUE_TYPES[memWriteTypedTypeIdx]));
+                promptText = String.format(
+                        "Type: \u25c4 %s \u25ba (\u2190/\u2192 to change, Enter to confirm)",
+                        TYPED_VALUE_TYPES[memWriteTypedTypeIdx]);
             } else {
-                sb.append(String.format("%nWrite %s at %s: %s_",
+                promptText = String.format("Write %s at %s: %s_",
                         TYPED_VALUE_TYPES[memWriteTypedTypeIdx],
                         memWriteTypedAddr,
-                        memWriteTypedValue));
+                        memWriteTypedValue);
             }
         }
-
         if (memStatusMessage != null) {
-            sb.append(String.format("%n%s", memStatusMessage));
+            promptText = (promptText != null ? promptText + "\n" : "") + memStatusMessage;
         }
-
-        var memTitle = String.format("Memory (%d pages, %d bytes)", mem.pages(), totalBytes);
 
         Element helpBar;
         if (inMemGoto || inMemWriteString || inMemWriteTyped) {
@@ -1775,6 +1859,21 @@ public final class W9sApp {
                     text(" back").dim().fit());
         }
 
+        var memContent =
+                column(
+                        panel(richText(sb.toString()).overflow(Overflow.CLIP).fill())
+                                .title(memTitle)
+                                .rounded()
+                                .borderColor(Color.CYAN)
+                                .fill(1),
+                        promptText != null
+                                ? panel(text(promptText).yellow().fit())
+                                        .rounded()
+                                        .borderColor(Color.YELLOW)
+                                        .length(3 + (promptText.contains("\n") ? 1 : 0))
+                                : text("").fit())
+                        .fill(1);
+
         return column(
                         titleBar,
                         row(
@@ -1784,11 +1883,7 @@ public final class W9sApp {
                                         .rounded()
                                         .borderColor(Color.DARK_GRAY)
                                         .length(28),
-                                panel(richText(sb.toString()).overflow(Overflow.CLIP).fill())
-                                        .title(memTitle)
-                                        .rounded()
-                                        .borderColor(Color.CYAN)
-                                        .fill(1))
+                                memContent)
                                 .fill(),
                         panel(helpBar)
                                 .rounded()
@@ -2233,20 +2328,50 @@ public final class W9sApp {
     }
 
     private Element renderGlobals() {
+        boolean hasInstance = wasmInstance != null;
+        int importedGlobals = module.importSection().count(ExternalType.GLOBAL);
         var t =
-                table()
-                        .header("#", "Type", "Mutable")
-                        .widths(length(5), fill(1), length(10))
-                        .columnSpacing(1);
+                hasInstance
+                        ? table()
+                                .header("#", "Type", "Mutable", "Value")
+                                .widths(length(5), fill(1), length(10), fill(1))
+                                .columnSpacing(1)
+                        : table()
+                                .header("#", "Type", "Mutable")
+                                .widths(length(5), fill(1), length(10))
+                                .columnSpacing(1);
         applyDetailHighlight(t);
         var gs = module.globalSection();
         for (int i = 0; i < gs.globalCount(); i++) {
             if (!matchesFilter(i)) continue;
             var g = gs.getGlobal(i);
-            t.row(
-                    String.valueOf(i),
-                    g.valueType().toString(),
-                    g.mutabilityType().name().toLowerCase());
+            if (hasInstance) {
+                var gi = wasmInstance.global(importedGlobals + i);
+                var valueStr = formatReturnValue(g.valueType(), gi.getValue());
+                t.row(
+                        String.valueOf(i),
+                        g.valueType().toString(),
+                        g.mutabilityType().name().toLowerCase(),
+                        valueStr);
+            } else {
+                t.row(
+                        String.valueOf(i),
+                        g.valueType().toString(),
+                        g.mutabilityType().name().toLowerCase());
+            }
+        }
+        if (inGlobalEdit) {
+            var g = gs.getGlobal(globalEditIdx);
+            var sb = new StringBuilder();
+            sb.append(String.format(
+                    "Set global #%d (%s): %s_", globalEditIdx, g.valueType(), globalEditValue));
+            if (globalEditError != null) {
+                sb.append(String.format("%n%s", globalEditError));
+            }
+            return column(t, text(sb.toString()).cyan().fit()).fill();
+        }
+        if (globalEditError != null) {
+            return column(t, text(globalEditError).cyan().fit()).fill();
         }
         return t;
     }

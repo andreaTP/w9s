@@ -319,6 +319,7 @@
                 <buildArg>--no-fallback</buildArg>
                 <buildArg>--initialize-at-build-time=io.roastedroot.zerofs</buildArg>
                 <buildArg>-H:+ForeignAPISupport</buildArg>
+                <buildArg>-H:+SharedArenaSupport</buildArg>
                 <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
               </buildArgs>
             </configuration>
