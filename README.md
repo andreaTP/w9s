@@ -2,6 +2,8 @@
 
 Terminal UI for inspecting WebAssembly modules.
 
+![w9s demo](demos/helloc.gif)
+
 ## Prerequisites
 
 - Java 25+
