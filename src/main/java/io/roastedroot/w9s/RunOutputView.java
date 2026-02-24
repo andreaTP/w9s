@@ -7,10 +7,15 @@ import com.dylibso.chicory.wasi.WasiExitException;
 import com.dylibso.chicory.wasm.types.ValType;
 import dev.tamboui.style.Color;
 import dev.tamboui.style.Overflow;
+import dev.tamboui.style.Style;
+import dev.tamboui.text.Line;
+import dev.tamboui.text.Span;
+import dev.tamboui.text.Text;
 import dev.tamboui.toolkit.element.Element;
 import dev.tamboui.toolkit.event.EventResult;
 import dev.tamboui.tui.event.KeyEvent;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 public final class RunOutputView implements View {
@@ -105,36 +110,112 @@ public final class RunOutputView implements View {
         boolean hasWasiExit = exitCode >= 0;
         var borderColor = (hasError || (hasWasiExit && exitCode != 0)) ? Color.RED : Color.GREEN;
 
-        var sb = new StringBuilder();
-        sb.append("Run: ").append(exportName).append('\n');
+        var lines = new ArrayList<Line>();
+
+        // Input Parameters section
         if (paramValues != null && paramValues.length > 0) {
-            sb.append("\n-- Input Parameters --\n");
+            lines.add(Line.from(List.of(
+                    Span.styled("━━ Input Parameters ━━", Style.EMPTY.fg(Color.CYAN).bold()))));
             for (int i = 0; i < paramValues.length; i++) {
-                sb.append("  param ").append(i).append(" (").append(paramTypes.get(i)).append("): ").append(paramValues[i]).append('\n');
+                lines.add(Line.from(List.of(
+                        Span.styled("  param " + i + " (" + paramTypes.get(i) + "): ", Style.EMPTY.dim()),
+                        Span.styled(paramValues[i], Style.EMPTY))));
             }
+            lines.add(Line.empty());
         }
+
+        // Return Values section
         if (results != null && results.length > 0) {
-            sb.append("\n-- Return Values --\n");
+            lines.add(Line.from(List.of(
+                    Span.styled("━━ Return Values ━━", Style.EMPTY.fg(Color.CYAN).bold()))));
             for (int i = 0; i < results.length; i++) {
                 var type = i < returnTypes.size() ? returnTypes.get(i) : ValType.I64;
-                sb.append("  result ").append(i).append(" (").append(type).append("): ").append(ParamUtils.formatReturnValue(type, results[i])).append('\n');
+                lines.add(Line.from(formatReturnValueSpans(i, type, results[i])));
+            }
+            lines.add(Line.empty());
+        }
+
+        // Status section
+        lines.add(Line.from(List.of(
+                Span.styled("━━ Status ━━", Style.EMPTY.fg(Color.CYAN).bold()))));
+        if (hasError) {
+            lines.add(Line.from(List.of(
+                    Span.styled("  " + execError, Style.EMPTY.fg(Color.RED)))));
+        } else if (hasWasiExit) {
+            var exitStyle = exitCode == 0 ? Style.EMPTY.fg(Color.GREEN) : Style.EMPTY.fg(Color.YELLOW);
+            lines.add(Line.from(List.of(
+                    Span.styled("  WASI exit code: " + exitCode, exitStyle))));
+        } else {
+            lines.add(Line.from(List.of(
+                    Span.styled("  Completed", Style.EMPTY.fg(Color.GREEN)))));
+        }
+        lines.add(Line.from(List.of(
+                Span.styled("  Duration: " + durationMs + "ms", Style.EMPTY.dim()))));
+
+        // stdout section
+        if (!stdout.isEmpty()) {
+            lines.add(Line.empty());
+            lines.add(Line.from(List.of(
+                    Span.styled("━━ stdout ━━", Style.EMPTY.fg(Color.CYAN).bold()))));
+            for (var line : stdout.split("\n", -1)) {
+                lines.add(Line.from(List.of(Span.styled(line, Style.EMPTY))));
             }
         }
-        sb.append("\n-- Status --\n");
-        if (hasError) sb.append("  ").append(execError).append('\n');
-        else if (hasWasiExit) sb.append("  WASI exit code: ").append(exitCode).append('\n');
-        else sb.append("  Completed");
-        sb.append("  Duration: ").append(durationMs).append("ms\n");
-        if (!stdout.isEmpty()) { sb.append("\n-- stdout --\n").append(stdout); if (!stdout.endsWith("\n")) sb.append('\n'); }
-        if (!stderr.isEmpty()) { sb.append("\n-- stderr --\n").append(stderr); if (!stderr.endsWith("\n")) sb.append('\n'); }
 
-        var scrolled = WasmUtils.scrollContent(sb.toString(), scrollOffset);
+        // stderr section
+        if (!stderr.isEmpty()) {
+            lines.add(Line.empty());
+            lines.add(Line.from(List.of(
+                    Span.styled("━━ stderr ━━", Style.EMPTY.fg(Color.RED).bold()))));
+            for (var line : stderr.split("\n", -1)) {
+                lines.add(Line.from(List.of(Span.styled(line, Style.EMPTY.fg(Color.RED)))));
+            }
+        }
+
+        // Apply scrolling
+        int start = Math.min(scrollOffset, Math.max(0, lines.size() - 1));
+        var displayLines = lines.subList(start, lines.size());
+        var styledText = Text.from(displayLines);
+
+        var bottomTitle = paramTypes + " \u2192 " + returnTypes;
         var helpContent = row(text(" r").cyan().fit(), text(" re-run  ").dim().fit(),
                 text("R").cyan().fit(), text(" reset  ").dim().fit(),
                 text("\u2191\u2193").cyan().fit(), text(" scroll  ").dim().fit(),
                 text("ESC/\u2190").cyan().fit(), text(" back").dim().fit());
 
-        var contentPanel = panel(richText(scrolled).overflow(Overflow.CLIP).fill()).title("Run: " + exportName).rounded().borderColor(borderColor).fill(1);
+        var contentPanel = panel(richText(styledText).overflow(Overflow.CLIP).fill())
+                .title("Run: " + exportName)
+                .bottomTitle(bottomTitle)
+                .rounded().borderColor(borderColor).fill(1);
         return ViewLayout.layout(ctx, contentPanel, helpContent);
+    }
+
+    private List<Span> formatReturnValueSpans(int index, ValType type, long value) {
+        var label = "  result " + index + " (" + type + "): ";
+        if (ValType.I32.equals(type)) {
+            int i = (int) value;
+            return List.of(
+                    Span.styled(label, Style.EMPTY.dim()),
+                    Span.styled(String.valueOf(i), Style.EMPTY.fg(Color.GREEN).bold()),
+                    Span.styled(" (0x" + Integer.toHexString(i) + ")", Style.EMPTY.dim()));
+        } else if (ValType.I64.equals(type)) {
+            return List.of(
+                    Span.styled(label, Style.EMPTY.dim()),
+                    Span.styled(String.valueOf(value), Style.EMPTY.fg(Color.GREEN).bold()),
+                    Span.styled(" (0x" + Long.toHexString(value) + ")", Style.EMPTY.dim()));
+        } else if (ValType.F32.equals(type)) {
+            float f = Float.intBitsToFloat((int) value);
+            return List.of(
+                    Span.styled(label, Style.EMPTY.dim()),
+                    Span.styled(String.valueOf(f), Style.EMPTY.fg(Color.GREEN).bold()));
+        } else if (ValType.F64.equals(type)) {
+            double d = Double.longBitsToDouble(value);
+            return List.of(
+                    Span.styled(label, Style.EMPTY.dim()),
+                    Span.styled(String.valueOf(d), Style.EMPTY.fg(Color.GREEN).bold()));
+        }
+        return List.of(
+                Span.styled(label, Style.EMPTY.dim()),
+                Span.styled(String.valueOf(value), Style.EMPTY.fg(Color.GREEN).bold()));
     }
 }
