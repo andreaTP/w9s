@@ -14,16 +14,12 @@ final class ViewLayout {
 
     static Element buildTitleBar(ViewContext ctx) {
         return row(
-                column(
-                        text(" \u257b \u257b \u250f\u2501\u2513 \u250f\u2501\u2578")
-                                .fg(Color.LIGHT_CYAN).bold(),
-                        text(" \u2503\u257b\u2503 \u2517\u2501\u252b \u2517\u2501\u2513")
-                                .cyan().bold(),
-                        text(" \u2517\u253b\u251b \u257a\u2501\u251b \u257a\u2501\u251b")
-                                .fg(Color.LIGHT_BLUE).bold())
-                        .length(12),
-                panel().title(ctx.filename()).rounded().borderColor(Color.CYAN).fill(1))
-                .length(3);
+                text(" \u24CC").fg(Color.RED).bold().fit(),
+                text("\u2468").fg(Color.YELLOW).bold().fit(),
+                text("\u24C8").fg(Color.GREEN).bold().fit(),
+                text("  ").fit(),
+                text(ctx.filename()).cyan().fit())
+                .length(1);
     }
 
     static TableElement buildSectionsTable(ViewContext ctx) {
